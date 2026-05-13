@@ -11,7 +11,7 @@ from flask import Flask, request
 TOKEN = '8505975357:AAEtUiLlhjg7joD-iJN2JPqj0fKmKyIYpw0'
 ADMIN_ID = 5541008041
 WEB_APP_URL = "https://eshoonqulov-math-testbot.netlify.app/"
-RENDER_URL = "https://mathbot-uame.onrender.com" 
+RENDER_URL = "https://mathbot-uame.onrender.com" # Oxirida / kerak emas, pastda o'zi to'g'rilanadi
 
 bot = telebot.TeleBot(TOKEN, threaded=True, num_threads=20)
 user_states = {}
