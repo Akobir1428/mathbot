@@ -11,8 +11,8 @@ from flask import Flask, request
 TOKEN = '8505975357:AAEtUiLlhjg7joD-iJN2JPqj0fKmKyIYpw0'
 ADMIN_ID = 5541008041
 WEB_APP_URL = "https://eshoonqulov-math-testbot.netlify.app/"
-RENDER_URL = "https://mathbot-uame.onrender.com" # Oxirida / kerak emas, pastda o'zi to'g'rilanadi
-https://mathbot-uame.onrender.com
+RENDER_URL = "https://mathbot-uame.onrender.com"
+
 bot = telebot.TeleBot(TOKEN, threaded=True, num_threads=20)
 user_states = {}
 app = Flask(__name__)
@@ -257,7 +257,6 @@ def getMessage():
 @app.route("/")
 def webhook():
     bot.remove_webhook()
-    # Ssilka va tokenni aniq formatlash (hatolik yuz bermaydi)
     webhook_url = f"{RENDER_URL}/{TOKEN}"
     bot.set_webhook(url=webhook_url)
     return "Bot muvaffaqiyatli ishga tushdi va tezkor rejimda ishlamoqda!", 200
