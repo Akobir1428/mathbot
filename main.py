@@ -13,7 +13,7 @@ ADMIN_ID = 5541008041
 WEB_APP_URL = "https://eshoonqulov-math-testbot.netlify.app/"
 
 # Render ssilkasi (Buni Render'dan ro'yxatdan o'tib URL olgach, shu yerga yozing!)
-# Masalan: "https://mening-botim.onrender.com/"
+# Masalan: "https://mathbot-uame.onrender.com"
 RENDER_URL = "https://mathbot-uame.onrender.com"
 # Botga ko'proq foydalanuvchiga bir vaqtda xizmat ko'rsatishiga ruxsat berish (num_threads=10)
 bot = telebot.TeleBot(TOKEN, num_threads=10)
