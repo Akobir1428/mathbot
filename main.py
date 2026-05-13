@@ -14,8 +14,7 @@ WEB_APP_URL = "https://eshoonqulov-math-testbot.netlify.app/"
 
 # Render ssilkasi (Buni Render'dan ro'yxatdan o'tib URL olgach, shu yerga yozing!)
 # Masalan: "https://mening-botim.onrender.com/"
-RENDER_URL = "https://SIZNING-APP-NOMINGIZ.onrender.com/"
-
+RENDER_URL = "https://mathbot-uame.onrender.com"
 # Botga ko'proq foydalanuvchiga bir vaqtda xizmat ko'rsatishiga ruxsat berish (num_threads=10)
 bot = telebot.TeleBot(TOKEN, num_threads=10)
 user_states = {}
