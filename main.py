@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import sqlite3
 import threading
@@ -9,6 +10,10 @@ import telebot
 from telebot import types
 from telebot.types import BotCommand
 from flask import Flask, request
+
+# PDF yaratish uchun kutubxonalar
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,7 +26,7 @@ TOKEN       = os.environ.get("BOT_TOKEN", "8505975357:AAEtUiLlhjg7joD-iJN2JPqj0f
 SUPER_ADMIN = int(os.environ.get("ADMIN_ID", "5541008041"))
 WEB_APP_URL = os.environ.get("WEB_APP_URL", "https://eshoonqulov-math-testbot.netlify.app/")
 _domain     = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
-RENDER_URL  = "https://mathbot-uame.onrender.com"
+RAILWAY_URL = f"https://{_domain}" if _domain else os.environ.get("RAILWAY_URL", "")
 DB_PATH     = os.environ.get("DB_PATH", "testlar_bazasi.db")
 PORT        = int(os.environ.get("PORT", 5000))
 
@@ -31,7 +36,6 @@ bot = telebot.TeleBot(TOKEN, threaded=True, num_threads=20)
 _states_lock = threading.Lock()
 _user_states: dict = {}
 
-# O'zbekiston vaqtini olish uchun yordamchi funksiya (UTC+5)
 def get_uz_now():
     return datetime.utcnow() + timedelta(hours=5)
 
@@ -99,7 +103,6 @@ def init_db():
         type     TEXT DEFAULT 'pdf',
         link     TEXT DEFAULT ''
     )""")
-    # local time o'rniga UTC+5 ga moslab saqlash
     db_exec("""CREATE TABLE IF NOT EXISTS results (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id       INTEGER NOT NULL,
@@ -140,6 +143,13 @@ def main_menu(chat_id):
     kb.add(
         types.KeyboardButton("📝 Test ishlash"),
         types.KeyboardButton("📊 Natijalarim"),
+    )
+    # ── YANGI BO'LIM QO'SHILDI ──
+    kb.add(
+        types.KeyboardButton(
+            "📈 Rush test", 
+            web_app=types.WebAppInfo(url="https://mathbothtml.netlify.app/")
+        )
     )
     if is_admin(chat_id):
         kb.add(
@@ -290,7 +300,6 @@ def _student_code_entered(msg):
     answers, deadline, test_type, html_link = row
     deadline = deadline or "0"
 
-    # Muddatni tekshirish (Toshkent vaqti bilan)
     if deadline != "0":
         try:
             if get_uz_now() > datetime.strptime(deadline, "%Y-%m-%d %H:%M"):
@@ -325,15 +334,82 @@ def _student_code_entered(msg):
               "Boshlash uchun tugmani bosing 👇",
               parse_mode="Markdown", reply_markup=kb)
 
+
+# ── YANGI BO'LIM: PDF YARATISH FUNKSIYASI ──
+def _handle_rush_test_data(msg, data):
+    user_name = msg.from_user.full_name
+    user_id = msg.from_user.id
+    score = data.get("score", 0)
+    total = data.get("total", 0)
+    details = data.get("details", [])
+    
+    filename = f"Rush_Natija_{user_id}.pdf"
+    
+    try:
+        # PDF Faylni chizish
+        c = canvas.Canvas(filename, pagesize=letter)
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(50, 750, "Akobir ustoz - Rush Modeli Test Natijalari")
+        c.setLineWidth(1)
+        c.line(50, 735, 550, 735)
+        
+        c.setFont("Helvetica", 12)
+        c.drawString(50, 700, f"O'quvchi: {user_name}")
+        c.drawString(50, 680, f"Umumiy natija: {score} / {total}")
+        
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(50, 640, "Tahlil va Reyting:")
+        
+        c.setFont("Helvetica", 10)
+        y = 620
+        for line in details:
+            c.drawString(50, y, str(line))
+            y -= 20
+            if y < 50:
+                c.showPage()
+                c.setFont("Helvetica", 10)
+                y = 750
+                
+        c.save()
+        
+        # Foydalanuvchiga yuborish
+        with open(filename, "rb") as f:
+            bot.send_document(
+                msg.chat.id, 
+                f, 
+                caption=f"📈 *{user_name}*, Rush test natijangiz tayyor!\nNatija: {score}/{total}", 
+                parse_mode="Markdown"
+            )
+            
+        # PDF serverda qolib ketmasligi uchun o'chirish
+        if os.path.exists(filename):
+            os.remove(filename)
+            
+    except Exception as e:
+        log.error("PDF yaratishda xato: %s", e)
+        safe_send(msg.chat.id, "❌ Natijani faylga yuklashda xatolik yuz berdi.")
+
 # ─────────────────────────────────────────
 #  WEB APP NATIJALARNI QABUL QILISH
 # ─────────────────────────────────────────
 @bot.message_handler(content_types=["web_app_data"])
 def handle_web_app(msg):
     try:
-        state    = get_state(msg.chat.id)
         raw_data = msg.web_app_data.data.strip()
-        action   = state.get("action")
+        
+        # ── YANGI QISM: Rush testdan kelgan JSON formatini tekshirish ──
+        # Agar bu Rush test bo'lsa JSON formatda keladi va PDF yuboriladi
+        try:
+            data = json.loads(raw_data)
+            if data.get("type") == "rush_test":
+                _handle_rush_test_data(msg, data)
+                return
+        except ValueError:
+            # Agar JSON bo'lmasa, pastdagi eski kod muammosiz ishlashda davom etadi
+            pass 
+
+        state  = get_state(msg.chat.id)
+        action = state.get("action")
 
         # ── ADMIN: PDF javoblarini saqlash ──
         if action == "admin_save":
@@ -353,8 +429,6 @@ def handle_web_app(msg):
             name      = state.get("name", "Noma'lum")
             code      = state.get("code", "?")
 
-            # ⛔️ MUHIM: Natijani saqlashdan oldin yana bir marta deadline'ni tekshiramiz.
-            # (Agar talaba testni avval ochib olib, deadline o'tgandan so'ng javob yuborsa, uni to'xtatamiz)
             row = db_fetch("SELECT deadline FROM tests WHERE code=?", (code,), one=True)
             if row and row[0] != "0":
                 try:
@@ -738,4 +812,3 @@ setup_webhook()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT, debug=False)
-    
