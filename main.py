@@ -21,7 +21,7 @@ TOKEN       = os.environ.get("BOT_TOKEN", "8505975357:AAEtUiLlhjg7joD-iJN2JPqj0f
 SUPER_ADMIN = int(os.environ.get("ADMIN_ID", "5541008041"))
 WEB_APP_URL = os.environ.get("WEB_APP_URL", "https://eshoonqulov-math-testbot.netlify.app/")
 _domain     = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
-RAILWAY_URL = f"https://{_domain}" if _domain else os.environ.get("RAILWAY_URL", "")
+RENDER_URL  = "https://mathbot-uame.onrender.com"
 DB_PATH     = os.environ.get("DB_PATH", "testlar_bazasi.db")
 PORT        = int(os.environ.get("PORT", 5000))
 
