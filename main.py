@@ -3,6 +3,7 @@ import json
 import logging
 import sqlite3
 import threading
+import math
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
@@ -118,6 +119,12 @@ def init_db():
         name     TEXT NOT NULL,
         added_at TEXT DEFAULT (datetime('now','+5 hours'))
     )""")
+    # ── YANGILANISH: RASCH MODEL UCHUN BA'ZA ──
+    db_exec("""CREATE TABLE IF NOT EXISTS rasch_answers (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        test_code   TEXT NOT NULL,
+        answers_bin TEXT NOT NULL
+    )""")
     log.info("Ma'lumotlar bazasi tayyor ✅")
 
 init_db()
@@ -144,10 +151,10 @@ def main_menu(chat_id):
         types.KeyboardButton("📝 Test ishlash"),
         types.KeyboardButton("📊 Natijalarim"),
     )
-    # ── YANGI BO'LIM QO'SHILDI ──
+    # Ushbu tugma oldingi html webapp uchun
     kb.add(
         types.KeyboardButton(
-            "📈 Rush test", 
+            "📈 Rush test WebApp", 
             web_app=types.WebAppInfo(url="https://mathbothtml.netlify.app/")
         )
     )
@@ -155,6 +162,7 @@ def main_menu(chat_id):
         kb.add(
             types.KeyboardButton("➕ Yangi test qo'shish"),
             types.KeyboardButton("➕ HTML test qo'shish"),
+            types.KeyboardButton("➕ Rush test qo'shish") # ── YANGI TUGMA ──
         )
         kb.add(types.KeyboardButton("📊 Natijalarni olish"))
     if is_super_admin(chat_id):
@@ -216,7 +224,7 @@ def cmd_info(msg):
         "Bu bot orqali:\n"
         "• 📝 Test ishlashingiz\n"
         "• 📊 Natijalaringizni ko'rishingiz mumkin\n\n"
-        "_Murojaat: @eshoonqulov_",
+        "_Created by Eshonqulov Akobir_",
         parse_mode="Markdown", reply_markup=main_menu(msg.chat.id))
 
 def _register_user(msg):
@@ -256,7 +264,63 @@ def cmd_my_results(msg):
               parse_mode="Markdown", reply_markup=main_menu(msg.chat.id))
 
 # ─────────────────────────────────────────
-#  TEST ISHLASH
+#  RASCH MATEMATIK HISOB-KITOB (YANGI)
+# ─────────────────────────────────────────
+def get_rasch_item_difficulties(code, total_q):
+    """Bazada yig'ilgan javoblardan har bir savolning obektiv qiyinligini aniqlash"""
+    rows = db_fetch("SELECT answers_bin FROM rasch_answers WHERE test_code=?", (code,))
+    # Agar ishtirokchilar kam bo'lsa (masalan 3 kishi), qiyinlikni 0 deb olib turadi (hali ma'lumot yetarli emas)
+    if not rows or len(rows) < 3:
+        return [0.0] * total_q
+    
+    difficulties = []
+    n_users = len(rows)
+    for i in range(total_q):
+        # Necha kishi shu i-savolni to'g'ri topgan?
+        correct_count = sum(1 for row in rows if len(row[0]) > i and row[0][i] == '1')
+        p = correct_count / n_users
+        
+        # Matematik xatolik (infinity) bermasligi uchun chegara
+        p = max(0.05, min(0.95, p))
+        
+        # Logit formula: b = ln((1-p) / p)
+        # Oson savollar manfiy (-), qiyin savollar musbat (+) chiqadi
+        b = math.log((1 - p) / p)
+        difficulties.append(b)
+        
+    return difficulties
+
+def calculate_rasch_theta(score, b_items):
+    """Maksimal ehtimollik (Newton-Raphson) orqali abituriyent qobiliyatini (theta) topish"""
+    total_q = len(b_items)
+    if score <= 0: return -3.0
+    if score >= total_q: return 3.0
+    
+    # Boshlang'ich taxmin
+    theta = math.log(score / (total_q - score))
+    
+    # 10 marta iteratsiya
+    for _ in range(10):
+        prob_sum = 0
+        info_sum = 0
+        for b in b_items:
+            try:
+                p = math.exp(theta - b) / (1 + math.exp(theta - b))
+            except OverflowError:
+                p = 1.0 if (theta - b) > 0 else 0.0
+            prob_sum += p
+            info_sum += p * (1 - p)
+            
+        diff = prob_sum - score
+        if abs(diff) < 0.01:
+            break
+        if info_sum > 0:
+            theta -= diff / info_sum
+            
+    return theta
+
+# ─────────────────────────────────────────
+#  TEST ISHLASH BO'LIMI
 # ─────────────────────────────────────────
 @bot.message_handler(commands=["test"])
 @bot.message_handler(func=lambda m: m.text == "📝 Test ishlash")
@@ -323,33 +387,27 @@ def _student_code_entered(msg):
             web_app=types.WebAppInfo(url=html_link)
         ))
     else:
+        # Rush va PDF uchun bir xil interfeys (javoblarni kiritish)
         kb.add(types.KeyboardButton(
             "📱 Javoblarni belgilash",
             web_app=types.WebAppInfo(url=f"{WEB_APP_URL}?count={len(answers)}")
         ))
     kb.add(types.KeyboardButton("🔙 Ortga qaytish"))
-
-    safe_send(msg.chat.id,
-              f"✅ *Test topildi!*\n🔢 Kod: `{code}`\n\n"
-              "Boshlash uchun tugmani bosing 👇",
-              parse_mode="Markdown", reply_markup=kb)
-
-
-# ── YANGI BO'LIM: PDF YARATISH FUNKSIYASI ──
-def _handle_rush_test_data(msg, data):
-    user_name = msg.from_user.full_name
-    user_id = msg.from_user.id
-    score = data.get("score", 0)
-    total = data.get("total", 0)
-    details = data.get("details", [])
     
-    filename = f"Rush_Natija_{user_id}.pdf"
-    
+    test_info_msg = f"✅ *Test topildi!*\n🔢 Kod: `{code}`\n"
+    if test_type == "rush":
+        test_info_msg += "⚡️ *Bu test Rasch model (BMBA tizimi) orqali baholanadi!*\n\n"
+    test_info_msg += "Boshlash uchun tugmani bosing 👇"
+
+    safe_send(msg.chat.id, test_info_msg, parse_mode="Markdown", reply_markup=kb)
+
+# ── YANGILANGAN: NATIVE PDF YARATISH FUNKSIYASI ──
+def _generate_and_send_pdf(chat_id, user_name, score, total, details):
+    filename = f"Natija_{chat_id}_{int(get_uz_now().timestamp())}.pdf"
     try:
-        # PDF Faylni chizish
         c = canvas.Canvas(filename, pagesize=letter)
         c.setFont("Helvetica-Bold", 16)
-        c.drawString(50, 750, "Akobir ustoz - Rush Modeli Test Natijalari")
+        c.drawString(50, 750, "Akobir ustoz - Rasch Modeli Test Natijalari")
         c.setLineWidth(1)
         c.line(50, 735, 550, 735)
         
@@ -372,22 +430,20 @@ def _handle_rush_test_data(msg, data):
                 
         c.save()
         
-        # Foydalanuvchiga yuborish
         with open(filename, "rb") as f:
             bot.send_document(
-                msg.chat.id, 
+                chat_id, 
                 f, 
-                caption=f"📈 *{user_name}*, Rush test natijangiz tayyor!\nNatija: {score}/{total}", 
+                caption=f"📈 *{user_name}*, maxsus test natijangiz tayyor!\nNatija: {score}/{total}", 
                 parse_mode="Markdown"
             )
             
-        # PDF serverda qolib ketmasligi uchun o'chirish
         if os.path.exists(filename):
             os.remove(filename)
             
     except Exception as e:
         log.error("PDF yaratishda xato: %s", e)
-        safe_send(msg.chat.id, "❌ Natijani faylga yuklashda xatolik yuz berdi.")
+        safe_send(chat_id, "❌ Natijani faylga yuklashda xatolik yuz berdi.")
 
 # ─────────────────────────────────────────
 #  WEB APP NATIJALARNI QABUL QILISH
@@ -397,29 +453,28 @@ def handle_web_app(msg):
     try:
         raw_data = msg.web_app_data.data.strip()
         
-        # ── YANGI QISM: Rush testdan kelgan JSON formatini tekshirish ──
-        # Agar bu Rush test bo'lsa JSON formatda keladi va PDF yuboriladi
+        # Eskicha JSON kelsa o'qish uchun (oldingi funksiya qoldi)
         try:
             data = json.loads(raw_data)
             if data.get("type") == "rush_test":
-                _handle_rush_test_data(msg, data)
+                _generate_and_send_pdf(msg.chat.id, msg.from_user.full_name, data.get("score", 0), data.get("total", 0), data.get("details", []))
                 return
         except ValueError:
-            # Agar JSON bo'lmasa, pastdagi eski kod muammosiz ishlashda davom etadi
             pass 
 
         state  = get_state(msg.chat.id)
         action = state.get("action")
 
-        # ── ADMIN: PDF javoblarini saqlash ──
+        # ── ADMIN: Javoblarni saqlash ──
         if action == "admin_save":
+            test_type = state.get("test_type", "pdf") # pdf yoki rush
             db_exec(
                 "INSERT OR REPLACE INTO tests (code, answers, deadline, type, link) "
                 "VALUES (?,?,?,?,?)",
-                (state["code"], raw_data.lower(), state.get("deadline", "0"), "pdf", "")
+                (state["code"], raw_data.lower(), state.get("deadline", "0"), test_type, "")
             )
             clear_state(msg.chat.id)
-            safe_send(msg.chat.id, "✅ Test muvaffaqiyatli saqlandi!",
+            safe_send(msg.chat.id, f"✅ {test_type.upper()} testi muvaffaqiyatli saqlandi!",
                       reply_markup=main_menu(msg.chat.id))
             return
 
@@ -441,20 +496,84 @@ def handle_web_app(msg):
                 except ValueError:
                     pass
 
-            if test_type == "pdf":
+            if test_type in ["pdf", "rush"]:
                 correct  = state.get("correct", "").lower()
                 received = raw_data.lower()
                 total    = len(correct)
-                score    = sum(1 for s, c in zip(received, correct) if s == c)
+                
+                bin_str = ""
+                score = 0
                 analysis = []
                 for i, (s, c) in enumerate(zip(received, correct), 1):
                     if s == c:
+                        bin_str += "1"
+                        score += 1
                         analysis.append(f"{i}✅")
                     else:
+                        bin_str += "0"
                         analysis.append(f"{i}❌({c.upper()})")
-                grid = "\n".join(
-                    " ".join(analysis[i:i+5]) for i in range(0, len(analysis), 5)
-                )
+                        
+                grid = "\n".join(" ".join(analysis[i:i+5]) for i in range(0, len(analysis), 5))
+
+                bar = progress_bar(score, total)
+
+                # ── RASCH MODEL TEKSHIRUVI (RUSH) ──
+                if test_type == "rush":
+                    # Matritsaga 0/1 larni kiritamiz
+                    db_exec("INSERT INTO rasch_answers (test_code, answers_bin) VALUES (?, ?)", (code, bin_str))
+                    
+                    # Approbatsiya va Thetani hisoblaymiz
+                    b_items = get_rasch_item_difficulties(code, total)
+                    theta = calculate_rasch_theta(score, b_items)
+                    
+                    # T-ball formulasiga solish (Normalizatsiya 50, standard error ~15)
+                    t_score = 50 + (15 * theta)
+                    t_score = max(0, min(100, round(t_score, 1)))
+
+                    # Darajani belgilash: Sizning "Minimal 15 ta C beradi" degan talabingiz
+                    if score < 15:
+                        grade = "Natija yo'q (O'tmadi) ❌"
+                    else:
+                        # 15 dan keyingi qadamlarni proporsional bo'lib chiqamiz
+                        step = (total - 15) / 3 
+                        if score < 15 + step:
+                            grade = "C Daraja (Qoniqarli) 🥉"
+                        elif score < 15 + 2 * step:
+                            grade = "B Daraja (Yaxshi) 🥈"
+                        else:
+                            grade = "A Daraja (A'lo) 🥇"
+
+                    result_text = (
+                        f"👤 *{name}*\n"
+                        f"🔢 Kod: `{code}` (Rasch Baholash)\n"
+                        f"📊 Natija: *{score}/{total}*\n"
+                        f"📈 T-ball: *{t_score}*\n"
+                        f"🎓 Sertifikat daraja: *{grade}*\n"
+                        f"{bar}\n\n"
+                        f"📋 *Tahlil:*\n{grid}"
+                    )
+                    
+                    # PDF xulosani jo'natish
+                    pdf_details = [
+                        f"Test kodi: {code} (Rasch Model)",
+                        f"To'g'ri javoblar: {score} ta",
+                        f"T-ball shkalasi: {t_score}",
+                        f"Sertifikat darajasi: {grade}",
+                        " ",
+                        "Javoblar tahlili:"
+                    ] + [ " ".join(analysis[i:i+5]) for i in range(0, len(analysis), 5) ]
+                    
+                    # Asosiy javobni ham PDFni ham bitta qilib jo'natamiz
+                    _generate_and_send_pdf(msg.chat.id, name, score, total, pdf_details)
+
+                else: # Oddiy PDF test
+                    result_text = (
+                        f"👤 *{name}*\n"
+                        f"🔢 Kod: `{code}`\n"
+                        f"📊 Natija: *{score}/{total}*\n"
+                        f"{bar}\n\n"
+                        f"📋 *Tahlil:*\n{grid}"
+                    )
 
             elif test_type == "html":
                 parts = raw_data.split("|")
@@ -467,18 +586,16 @@ def handle_web_app(msg):
                     grid = parts[2] if len(parts) > 2 else "✅ Test yakunlandi"
                 else:
                     score, total, grid = 0, 0, "⚠️ Natija formati noto'g'ri"
+                bar = progress_bar(score, total)
+                result_text = (
+                    f"👤 *{name}*\n"
+                    f"🔢 Kod: `{code}`\n"
+                    f"📊 Natija: *{score}/{total}*\n"
+                    f"{bar}\n\n"
+                    f"📋 *Tahlil:*\n{grid}"
+                )
             else:
                 return
-
-            bar = progress_bar(score, total)
-
-            result_text = (
-                f"👤 *{name}*\n"
-                f"🔢 Kod: `{code}`\n"
-                f"📊 Natija: *{score}/{total}*\n"
-                f"{bar}\n\n"
-                f"📋 *Tahlil:*\n{grid}"
-            )
 
             db_exec(
                 "INSERT INTO results (user_id, name, code, score, total, analysis_text) "
@@ -509,28 +626,41 @@ def admin_add_pdf(msg):
                   "Kod va savol sonini kiriting\n_(Misol: 701 30)_",
                   parse_mode="Markdown", reply_markup=back_kb())
     if m:
-        bot.register_next_step_handler(m, _admin_pdf_code)
+        bot.register_next_step_handler(m, _admin_base_code, "pdf")
 
-def _admin_pdf_code(msg):
+# ─────────────────────────────────────────
+#  ADMIN: RUSH TEST QO'SHISH (YANGI)
+# ─────────────────────────────────────────
+@bot.message_handler(func=lambda m: m.text == "➕ Rush test qo'shish")
+def admin_add_rush(msg):
+    if not is_admin(msg.chat.id):
+        return
+    m = safe_send(msg.chat.id,
+                  "Rasch modeli asosida baholanuvchi kod va savol sonini kiriting\n_(Misol: 801 40)_",
+                  parse_mode="Markdown", reply_markup=back_kb())
+    if m:
+        bot.register_next_step_handler(m, _admin_base_code, "rush")
+
+def _admin_base_code(msg, test_type):
     if is_back(msg.text):
         return go_home(msg)
     try:
         parts = msg.text.strip().split()
         code  = parts[0].upper()
         count = int(parts[1])
-        set_state(msg.chat.id, {"action": "admin_save_deadline", "code": code, "count": count})
+        set_state(msg.chat.id, {"action": "admin_save_deadline", "code": code, "count": count, "test_type": test_type})
         m = safe_send(msg.chat.id,
                       "📅 Yopilish vaqtini kiriting\n_(Misol: 2025-12-31 18:00)_ yoki *0* (cheksiz)",
                       parse_mode="Markdown", reply_markup=back_kb())
         if m:
-            bot.register_next_step_handler(m, _admin_pdf_deadline)
+            bot.register_next_step_handler(m, _admin_base_deadline)
     except (IndexError, ValueError):
         m = safe_send(msg.chat.id, "❌ Noto'g'ri format!\n_(Misol: 701 30)_",
                       parse_mode="Markdown")
         if m:
-            bot.register_next_step_handler(m, _admin_pdf_code)
+            bot.register_next_step_handler(m, _admin_base_code, test_type)
 
-def _admin_pdf_deadline(msg):
+def _admin_base_deadline(msg):
     if is_back(msg.text):
         return go_home(msg)
     deadline = msg.text.strip()
@@ -540,7 +670,7 @@ def _admin_pdf_deadline(msg):
         except ValueError:
             m = safe_send(msg.chat.id, "❌ Noto'g'ri format! (YYYY-MM-DD HH:MM) yoki 0:")
             if m:
-                bot.register_next_step_handler(m, _admin_pdf_deadline)
+                bot.register_next_step_handler(m, _admin_base_deadline)
             return
 
     update_state(msg.chat.id, deadline=deadline, action="admin_save")
@@ -551,9 +681,11 @@ def _admin_pdf_deadline(msg):
         web_app=types.WebAppInfo(url=f"{WEB_APP_URL}?count={state['count']}")
     ))
     kb.add(types.KeyboardButton("🔙 Ortga qaytish"))
+    
+    t_name = "Rush (Rasch)" if state.get("test_type") == "rush" else "PDF"
     safe_send(msg.chat.id,
-              f"✅ *Kod:* `{state['code']}`\n📅 *Muddat:* {deadline}\n\n"
-              "Tugmani bosib javoblarni kiriting 👇",
+              f"✅ *Kod:* `{state['code']}` ({t_name})\n📅 *Muddat:* {deadline}\n\n"
+              "Tugmani bosib to'g'ri javoblarni kiriting 👇",
               parse_mode="Markdown", reply_markup=kb)
 
 # ─────────────────────────────────────────
